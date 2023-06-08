@@ -1,29 +1,15 @@
-# sma-emeter-simulator
-An SMA(TM) emeter simulator written in C++. It mimics an SMA(TM) emeter device on your local network by generating the same kind of udp packets that an actual SMA(TM) emeter would generate.
+# SMA Home Manager Simulator
 
-SMA-Emeters(TM) send out udp packets including electrical power and energy measurements at intervals of 1000ms. Each udp packet is 608 bytes long, or 600 bytes for older firmware versions, long and its format is specified in a publicly available specification document provided by the manufacturer (https://developer.sma.de/fileadmin/content/global/Partner/Documents/SMA_Labs/EMETER-Protokoll-TI-en-10.pdf).
+Modified version of the [emeter simulator](https://github.com/RalfOGit/sma-emeter-simulator) to simulate a Sunny Home Manager 2.0 sending data to an EV charger.
+For now it provides a linear ramp of PV feed in starting at 1500 Watt to 11kW and down again, incrementing by 10W every second.
 
-The executable starts by assembling a udp datagram as described in the SMA-Emeter(TM) specification document.
-
-Afterwards it starts an infinite main loop. Within the main loop it repetitively transmits the same udp datagram every 1000 milliseconds, while updating the timestamp inside the packet.
-
-The software comes as is. No warrantees whatsoever are given and no responsibility is assumed in case of failure. There is neither a GUI nor a configuration file. Configurations must be tweaked by modifying main.cpp.
-
-The code is based on a Speedwire(TM) access library implementation https://github.com/RalfOGit/libspeedwire. The libspeedwire library implements a full parser for the sma header and the emeter datagram structure, including obis filtering. In addition, it implements some parsing functionality for inverter query and response datagrams. For convenience you may want to place the libspeedwire/ folder right next to the src/ and include/ folders of this repository.
-
-The accompanied CMakeLists.txt assumes the following folder structure:
-
-    sma-emeter-simulator
-        src
-        include
-        libspeedwire
-            src
-            include
-            CMakeLists.txt
-        ... build path ...
-        CMakeLists.txt
-
-The code has been tested against the following environment:
-
-    OS: CentOS 8(TM), IDE: VSCode (TM)
-    OS: Windows 10(TM), IDE: Visual Studio Community Edition 2019 (TM)
+```
+git clone https://github.com/RalfOGit/libspeedwire.git
+git clone git@github.com:danieltwagner/sma-emeter-simulator.git
+cd sma-emeter-simulator
+ln -s ../libspeedwire .
+mkdir build && cd build
+cmake ..
+make
+./sma-emeter-simulator 192.168.1.111
+```

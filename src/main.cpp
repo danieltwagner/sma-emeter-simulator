@@ -2,12 +2,16 @@
 #include <Winsock2.h>
 #include <Ws2tcpip.h>
 #else
-#include <unistd.h>
-#include <sys/socket.h>
+#include <arpa/inet.h>
 #include <netinet/in.h>
+#include <sys/socket.h>
+#include <unistd.h>
 #endif
 
-#include <LocalHost.hpp>
+#include <chrono>
+#include <iostream>
+#include <thread>
+
 #include <AddressConversion.hpp>
 #include <Logger.hpp>
 #include <SpeedwireSocketFactory.hpp>
@@ -15,7 +19,7 @@
 #include <SpeedwireEmeterProtocol.hpp>
 #include <ObisData.hpp>
 using namespace libspeedwire;
-
+using namespace std::chrono;
 
 // since firmware version 2.03.4.R a frequency measurement has been added to emeter packets
 // and the udp packet size is 608 bytes
@@ -45,8 +49,113 @@ public:
 
 static Logger logger("main");
 
+void populatePacket(const uint8_t *udp_packet, double feed_in_watts) {
+    SpeedwireHeader speedwire_packet(udp_packet, sizeof(udp_packet));
+    uint16_t udp_payload_length = (uint16_t)(UDP_PACKET_SIZE - SpeedwireHeader::getPayloadOffset(SpeedwireHeader::sma_emeter_protocol_id) - 2);  // -2 for whatever reason
+    speedwire_packet.setDefaultHeader(1, udp_payload_length, SpeedwireHeader::sma_emeter_protocol_id);
+
+    SpeedwireEmeterProtocol emeter_packet(speedwire_packet);
+    emeter_packet.setSusyID(0x174);
+    emeter_packet.setSerialNumber(1901567274);
+
+    uint64_t epoch_ms = duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count();
+    emeter_packet.setTime(epoch_ms);
+
+    void* obis = emeter_packet.getFirstObisElement();
+
+    // compute totals
+    double power_factor = 0.99;
+    double app_power = feed_in_watts/power_factor;
+
+    // Write totals into packet in the same order that Sunny Home Manager does.
+    // We assume that the charger doesn't care that totals don't increase...
+    obis = insert(emeter_packet, obis, ObisData::PositiveActivePowerTotal,           0.00); // Power drawn from grid
+    obis = insert(emeter_packet, obis, ObisData::PositiveActiveEnergyTotal,   12345678.90);
+    obis = insert(emeter_packet, obis, ObisData::NegativeActivePowerTotal,  feed_in_watts); // Grid feed-in
+    obis = insert(emeter_packet, obis, ObisData::NegativeActiveEnergyTotal,   12345678.90);
+    obis = insert(emeter_packet, obis, ObisData::PositiveReactivePowerTotal,         0.00); // Reactive power grid feed-in
+    obis = insert(emeter_packet, obis, ObisData::PositiveReactiveEnergyTotal, 12345678.90);
+    obis = insert(emeter_packet, obis, ObisData::NegativeReactivePowerTotal,         0.00); // Reactive power drawn from grid
+    obis = insert(emeter_packet, obis, ObisData::NegativeReactiveEnergyTotal, 12345678.90);
+    obis = insert(emeter_packet, obis, ObisData::PositiveApparentPowerTotal,         0.00); // Apparent power drawn from grid
+    obis = insert(emeter_packet, obis, ObisData::PositiveApparentEnergyTotal, 12345678.90);
+    obis = insert(emeter_packet, obis, ObisData::NegativeApparentPowerTotal,    app_power); // Apparent power fed into grid
+    obis = insert(emeter_packet, obis, ObisData::NegativeApparentEnergyTotal, 12345678.90);
+    obis = insert(emeter_packet, obis, ObisData::PowerFactorTotal,           power_factor);
+#if INCLUDE_FREQUENCY_MEASUREMENT
+    obis = insert(emeter_packet, obis, ObisData::Frequency,                         50.16);
+#endif
+
+    // assume exactly equal distribution across phases
+
+    // line 1
+    obis = insert(emeter_packet, obis, ObisData::PositiveActivePowerL1,            0.00);
+    obis = insert(emeter_packet, obis, ObisData::PositiveActiveEnergyL1,    12345678.90);
+    obis = insert(emeter_packet, obis, ObisData::NegativeActivePowerL1, feed_in_watts/3);
+    obis = insert(emeter_packet, obis, ObisData::NegativeActiveEnergyL1,    12345678.90);
+    obis = insert(emeter_packet, obis, ObisData::PositiveReactivePowerL1,          0.00);
+    obis = insert(emeter_packet, obis, ObisData::PositiveReactiveEnergyL1,  12345678.90);
+    obis = insert(emeter_packet, obis, ObisData::NegativeReactivePowerL1,          0.00);
+    obis = insert(emeter_packet, obis, ObisData::NegativeReactiveEnergyL1,  12345678.90);
+    obis = insert(emeter_packet, obis, ObisData::PositiveApparentPowerL1,          0.00);
+    obis = insert(emeter_packet, obis, ObisData::PositiveApparentEnergyL1,  12345678.90);
+    obis = insert(emeter_packet, obis, ObisData::NegativeApparentPowerL1,   app_power/3);
+    obis = insert(emeter_packet, obis, ObisData::NegativeApparentEnergyL1,  12345678.90);
+    obis = insert(emeter_packet, obis, ObisData::CurrentL1,                        0.18);
+    obis = insert(emeter_packet, obis, ObisData::VoltageL1,                      231.97);
+    obis = insert(emeter_packet, obis, ObisData::PowerFactorL1,            power_factor);
+
+    // line 2
+    obis = insert(emeter_packet, obis, ObisData::PositiveActivePowerL2,            0.00);
+    obis = insert(emeter_packet, obis, ObisData::PositiveActiveEnergyL2,    12345678.90);
+    obis = insert(emeter_packet, obis, ObisData::NegativeActivePowerL2, feed_in_watts/3);
+    obis = insert(emeter_packet, obis, ObisData::NegativeActiveEnergyL2,    12345678.90);
+    obis = insert(emeter_packet, obis, ObisData::PositiveReactivePowerL2,          0.00);
+    obis = insert(emeter_packet, obis, ObisData::PositiveReactiveEnergyL2,  12345678.90);
+    obis = insert(emeter_packet, obis, ObisData::NegativeReactivePowerL2,          0.00);
+    obis = insert(emeter_packet, obis, ObisData::NegativeReactiveEnergyL2,  12345678.90);
+    obis = insert(emeter_packet, obis, ObisData::PositiveApparentPowerL2,          0.00);
+    obis = insert(emeter_packet, obis, ObisData::PositiveApparentEnergyL2,  12345678.90);
+    obis = insert(emeter_packet, obis, ObisData::NegativeApparentPowerL2,   app_power/3);
+    obis = insert(emeter_packet, obis, ObisData::NegativeApparentEnergyL2,  12345678.90);
+    obis = insert(emeter_packet, obis, ObisData::CurrentL2,                        1.12);
+    obis = insert(emeter_packet, obis, ObisData::VoltageL2,                      230.66);
+    obis = insert(emeter_packet, obis, ObisData::PowerFactorL2,            power_factor);
+
+    // line 3
+    obis = insert(emeter_packet, obis, ObisData::PositiveActivePowerL3,            0.00);
+    obis = insert(emeter_packet, obis, ObisData::PositiveActiveEnergyL3,    12345678.90);
+    obis = insert(emeter_packet, obis, ObisData::NegativeActivePowerL3, feed_in_watts/3);
+    obis = insert(emeter_packet, obis, ObisData::NegativeActiveEnergyL3,    12345678.90);
+    obis = insert(emeter_packet, obis, ObisData::PositiveReactivePowerL3,          0.00);
+    obis = insert(emeter_packet, obis, ObisData::PositiveReactiveEnergyL3,  12345678.90);
+    obis = insert(emeter_packet, obis, ObisData::NegativeReactivePowerL3,         40.66);
+    obis = insert(emeter_packet, obis, ObisData::NegativeReactiveEnergyL3,  12345678.90);
+    obis = insert(emeter_packet, obis, ObisData::PositiveApparentPowerL3,          0.00);
+    obis = insert(emeter_packet, obis, ObisData::PositiveApparentEnergyL3,  12345678.90);
+    obis = insert(emeter_packet, obis, ObisData::NegativeApparentPowerL3,   app_power/3);
+    obis = insert(emeter_packet, obis, ObisData::NegativeApparentEnergyL3,  12345678.90);
+    obis = insert(emeter_packet, obis, ObisData::CurrentL3,                        0.23);
+    obis = insert(emeter_packet, obis, ObisData::VoltageL3,                      230.09);
+    obis = insert(emeter_packet, obis, ObisData::PowerFactorL3,            power_factor);
+
+    // software version
+    obis = insert(emeter_packet, obis, ObisData::SoftwareVersion, "2.11.5.R");
+    obis = insert(emeter_packet, obis, ObisData::EndOfData,       "");
+
+    // check if the packet is fully assembled
+    if (((uint8_t*)obis - udp_packet) != UDP_PACKET_SIZE) {
+        logger.print(LogLevel::LOG_ERROR, "invalid udp packet size %lu\n", (unsigned long)((uint8_t*)obis - udp_packet));
+    }
+}
 
 int main(int argc, char** argv) {
+
+    if (argc < 2) {
+        std::cerr << "Usage: " << argv[0] << " ip_addr" << std::endl;
+        return 1;
+    }
+    char *hostname = argv[1];
 
     // configure logger and logging levels
     ILogListener* log_listener = new LogListener();
@@ -57,156 +166,61 @@ int main(int argc, char** argv) {
     log_level = log_level | LogLevel::LOG_INFO_3;
     Logger::setLogListener(log_listener, log_level);
 
-    // configure sockets; use unicast socket to avoid messing around with igmp issues
-    LocalHost &localhost = LocalHost::getInstance();
-    SpeedwireSocketFactory *socket_factory = SpeedwireSocketFactory::getInstance(localhost, SpeedwireSocketFactory::SocketStrategy::ONE_UNICAST_SOCKET_FOR_EACH_INTERFACE);
+    int sock = ::socket(AF_INET, SOCK_DGRAM, 0);
+    sockaddr_in destination;
+    destination.sin_family = AF_INET;
+    destination.sin_port = htons(9522);
+    destination.sin_addr.s_addr = inet_addr(hostname);
 
-    // define speedwire packet and initialize header
     uint8_t udp_packet[UDP_PACKET_SIZE];
-    uint16_t udp_payload_length = (uint16_t)(UDP_PACKET_SIZE - SpeedwireHeader::getPayloadOffset(SpeedwireHeader::sma_emeter_protocol_id) - 2);  // -2 for whatever reason
+    double wattsMax = 11000;
+    double wattsMin = 1400;
+    double feedInWatts = 1500;
+    double increment = 10;
 
-    SpeedwireHeader speedwire_packet(udp_packet, sizeof(udp_packet));
-    speedwire_packet.setDefaultHeader(1, udp_payload_length, SpeedwireHeader::sma_emeter_protocol_id);
-
-    SpeedwireEmeterProtocol emeter_packet(speedwire_packet);
-    emeter_packet.setSusyID(349);
-    emeter_packet.setSerialNumber(1901567274);
-    emeter_packet.setTime((uint32_t)localhost.getUnixEpochTimeInMs());
-
-    // insert all measurements available in an sma emeter packet into udp packet payload;
-    // they are inserted in the same order as they are generated by an sme emeter device;
-    // the order is important, as most open source projects do not parse obis elements 
-    // but rather assume information at a given byte offset inside the udp packet.
-    void* obis = emeter_packet.getFirstObisElement();
-
-    // totals
-    obis = insert(emeter_packet, obis, ObisData::PositiveActivePowerTotal,     121.60);
-    obis = insert(emeter_packet, obis, ObisData::PositiveActiveEnergyTotal,   1320.34);
-    obis = insert(emeter_packet, obis, ObisData::NegativeActivePowerTotal,       0.00);
-    obis = insert(emeter_packet, obis, ObisData::NegativeActiveEnergyTotal,    305.03);
-    obis = insert(emeter_packet, obis, ObisData::PositiveReactivePowerTotal,     0.00);
-    obis = insert(emeter_packet, obis, ObisData::PositiveReactiveEnergyTotal,    5.90);
-    obis = insert(emeter_packet, obis, ObisData::NegativeReactivePowerTotal,   188.90);
-    obis = insert(emeter_packet, obis, ObisData::NegativeReactiveEnergyTotal,  949.68);
-    obis = insert(emeter_packet, obis, ObisData::PositiveApparentPowerTotal,   224.60);
-    obis = insert(emeter_packet, obis, ObisData::PositiveApparentEnergyTotal, 1757.41);
-    obis = insert(emeter_packet, obis, ObisData::NegativeApparentPowerTotal,     0.00);
-    obis = insert(emeter_packet, obis, ObisData::NegativeApparentEnergyTotal,  327.62);
-    obis = insert(emeter_packet, obis, ObisData::PowerFactorTotal,               0.54);
-#if INCLUDE_FREQUENCY_MEASUREMENT
-    obis = insert(emeter_packet, obis, ObisData::Frequency,                     50.16);
-#endif
-
-    // line 1
-    obis = insert(emeter_packet, obis, ObisData::PositiveActivePowerL1,          0.00);
-    obis = insert(emeter_packet, obis, ObisData::PositiveActiveEnergyL1,       337.53);
-    obis = insert(emeter_packet, obis, ObisData::NegativeActivePowerL1,         21.70);
-    obis = insert(emeter_packet, obis, ObisData::NegativeActiveEnergyL1,       141.54);
-    obis = insert(emeter_packet, obis, ObisData::PositiveReactivePowerL1,        0.00);
-    obis = insert(emeter_packet, obis, ObisData::PositiveReactiveEnergyL1,       2.48);
-    obis = insert(emeter_packet, obis, ObisData::NegativeReactivePowerL1,       22.30);
-    obis = insert(emeter_packet, obis, ObisData::NegativeReactiveEnergyL1,     176.48);
-    obis = insert(emeter_packet, obis, ObisData::PositiveApparentPowerL1,        0.00);
-    obis = insert(emeter_packet, obis, ObisData::PositiveApparentEnergyL1,     473.68);
-    obis = insert(emeter_packet, obis, ObisData::NegativeApparentPowerL1,       31.10);
-    obis = insert(emeter_packet, obis, ObisData::NegativeApparentEnergyL1,     144.26);
-    obis = insert(emeter_packet, obis, ObisData::CurrentL1,                      0.18);
-    obis = insert(emeter_packet, obis, ObisData::VoltageL1,                    231.97);
-    obis = insert(emeter_packet, obis, ObisData::PowerFactorL1,                  0.70);
-
-    // line 2
-    obis = insert(emeter_packet, obis, ObisData::PositiveActivePowerL2,        160.80);
-    obis = insert(emeter_packet, obis, ObisData::PositiveActiveEnergyL2,       775.23);
-    obis = insert(emeter_packet, obis, ObisData::NegativeActivePowerL2,          0.00);
-    obis = insert(emeter_packet, obis, ObisData::NegativeActiveEnergyL2,        77.80);
-    obis = insert(emeter_packet, obis, ObisData::PositiveReactivePowerL2,        0.00);
-    obis = insert(emeter_packet, obis, ObisData::PositiveReactiveEnergyL2,       7.38);
-    obis = insert(emeter_packet, obis, ObisData::NegativeReactivePowerL2,      126.00);
-    obis = insert(emeter_packet, obis, ObisData::NegativeReactiveEnergyL2,     535.19);
-    obis = insert(emeter_packet, obis, ObisData::PositiveApparentPowerL2,      204.30);
-    obis = insert(emeter_packet, obis, ObisData::PositiveApparentEnergyL2,     974.19);
-    obis = insert(emeter_packet, obis, ObisData::NegativeApparentPowerL2,        0.00);
-    obis = insert(emeter_packet, obis, ObisData::NegativeApparentEnergyL2,      89.10);
-    obis = insert(emeter_packet, obis, ObisData::CurrentL2,                      1.12);
-    obis = insert(emeter_packet, obis, ObisData::VoltageL2,                    230.66);
-    obis = insert(emeter_packet, obis, ObisData::PowerFactorL2,                  0.79);
-
-    // line 3
-    obis = insert(emeter_packet, obis, ObisData::PositiveActivePowerL3,          0.00);
-    obis = insert(emeter_packet, obis, ObisData::PositiveActiveEnergyL3,       271.21);
-    obis = insert(emeter_packet, obis, ObisData::NegativeActivePowerL3,         17.60);
-    obis = insert(emeter_packet, obis, ObisData::NegativeActiveEnergyL3,       149.31);
-    obis = insert(emeter_packet, obis, ObisData::PositiveReactivePowerL3,        0.00);
-    obis = insert(emeter_packet, obis, ObisData::PositiveReactiveEnergyL3,       1.70);
-    obis = insert(emeter_packet, obis, ObisData::NegativeReactivePowerL3,       40.66);
-    obis = insert(emeter_packet, obis, ObisData::NegativeReactiveEnergyL3,     243.67);
-    obis = insert(emeter_packet, obis, ObisData::PositiveApparentPowerL3,        0.00);
-    obis = insert(emeter_packet, obis, ObisData::PositiveApparentEnergyL3,     434.62);
-    obis = insert(emeter_packet, obis, ObisData::NegativeApparentPowerL3,       44.30);
-    obis = insert(emeter_packet, obis, ObisData::NegativeApparentEnergyL3,     156.83);
-    obis = insert(emeter_packet, obis, ObisData::CurrentL3,                      0.23);
-    obis = insert(emeter_packet, obis, ObisData::VoltageL3,                    230.09);
-    obis = insert(emeter_packet, obis, ObisData::PowerFactorL3,                  0.40);
-
-    // software version
-    obis = insert(emeter_packet, obis, ObisData::SoftwareVersion, "2.0.18.82");
-    obis = insert(emeter_packet, obis, ObisData::EndOfData,       "");
-
-    // check if the packet is fully assembled
-    if (((uint8_t*)obis - udp_packet) != sizeof(udp_packet)) {
-        logger.print(LogLevel::LOG_ERROR, "invalid udp packet size %lu\n", (unsigned long)((uint8_t*)obis - udp_packet));
-    }
-
-#if 1
-    // for debugging purposes
-    SpeedwireHeader protocol(udp_packet, sizeof(udp_packet));
-    bool valid = protocol.checkHeader();
-    if (valid) {
-        uint32_t group      = protocol.getGroup();
-        uint16_t length     = protocol.getLength();
-        uint16_t protocolID = protocol.getProtocolID();
-        int      offset     = protocol.getPayloadOffset();
-
-        if (protocolID == SpeedwireHeader::sma_emeter_protocol_id) {
-            SpeedwireEmeterProtocol emeter(protocol);
-            uint16_t susyid = emeter.getSusyID();
-            uint32_t serial = emeter.getSerialNumber();
-            uint32_t timer  = emeter.getTime();
-
-            // extract obis data from the emeter packet and print each obis element
-            void* obis = emeter.getFirstObisElement();
-            while (obis != NULL) {
-                //emeter.printObisElement(obis, stderr);
-                logger.print(LogLevel::LOG_INFO_2, "%s %s %s", SpeedwireEmeterProtocol::toHeaderString(obis).c_str(), SpeedwireEmeterProtocol::toValueString(obis, true).c_str(), SpeedwireEmeterProtocol::toValueString(obis, false).c_str());
-                obis = emeter.getNextObisElement(obis);
-            }
-        }
-    }
-#endif
-
-    //
-    // main loop
-    //
     while (true) {
 
-        // update timer
-        uint32_t current_time = (uint32_t)localhost.getUnixEpochTimeInMs();
-        emeter_packet.setTime(current_time);
+        logger.print(LogLevel::LOG_INFO_0, "Sending packet feeding in %5.0f Watts...", feedInWatts);
+        populatePacket(udp_packet, feedInWatts);
 
-        // send speedwire emeter packet to all local interfaces
-        const std::vector<std::string>& localIPs = localhost.getLocalIPv4Addresses();
-        for (auto& local_ip_addr : localIPs) {
-            SpeedwireSocket& socket = socket_factory->getSendSocket(SpeedwireSocketFactory::SocketType::UNICAST, local_ip_addr);
-            logger.print(LogLevel::LOG_INFO_0, "broadcast sma emeter packet to %s (via interface %s)\n", AddressConversion::toString(socket.getSpeedwireMulticastIn4Address()).c_str(), socket.getLocalInterfaceAddress().c_str());
-            int nbytes = socket.send(udp_packet, sizeof(udp_packet));
-            if (nbytes != sizeof(udp_packet)) {
-                logger.print(LogLevel::LOG_ERROR, "cannot send udp packet %d\n", nbytes);
+#if 0
+        // for debugging purposes
+        SpeedwireHeader protocol(udp_packet, sizeof(udp_packet));
+        bool valid = protocol.checkHeader();
+        if (valid) {
+            uint32_t group      = protocol.getGroup();
+            uint16_t length     = protocol.getLength();
+            uint16_t protocolID = protocol.getProtocolID();
+            int      offset     = protocol.getPayloadOffset();
+
+            if (protocolID == SpeedwireHeader::sma_emeter_protocol_id) {
+                SpeedwireEmeterProtocol emeter(protocol);
+                uint16_t susyid = emeter.getSusyID();
+                uint32_t serial = emeter.getSerialNumber();
+                uint32_t timer  = emeter.getTime();
+
+                // extract obis data from the emeter packet and print each obis element
+                void* obis = emeter.getFirstObisElement();
+                while (obis != NULL) {
+                    //emeter.printObisElement(obis, stderr);
+                    logger.print(LogLevel::LOG_INFO_2, "%s %s %s", SpeedwireEmeterProtocol::toHeaderString(obis).c_str(), SpeedwireEmeterProtocol::toValueString(obis, true).c_str(), SpeedwireEmeterProtocol::toValueString(obis, false).c_str());
+                    obis = emeter.getNextObisElement(obis);
+                }
             }
         }
+#endif
 
-        // sleep for 1000 milliseconds
-        LocalHost::sleep(1000);
+        ::sendto(sock, udp_packet, UDP_PACKET_SIZE, 0, reinterpret_cast<sockaddr*>(&destination), sizeof(destination));
+
+        feedInWatts += increment;
+        if (feedInWatts >= wattsMax || feedInWatts <= wattsMin) {
+            increment *= -1;
+        }
+
+        std::this_thread::sleep_for(1000ms);
     }
+
+    ::close(sock);
 
     return 0;
 }
@@ -220,7 +234,7 @@ void* insert(SpeedwireEmeterProtocol& emeter_packet, void* const obis, const Obi
     temp.measurementValues.addMeasurement(value, 0);
     // convert it into the obis byte representation
     std::array<uint8_t, 12> byte_array = temp.toByteArray();
-    // insert it into the given emeter packet 
+    // insert it into the given emeter packet
     return emeter_packet.setObisElement(obis, byte_array.data());
 }
 
@@ -232,6 +246,6 @@ void* insert(SpeedwireEmeterProtocol& emeter_packet, void* const obis, const Obi
     temp.measurementValues.value_string = value;
     // convert it into the obis byte representation
     std::array<uint8_t, 12> byte_array = temp.toByteArray();
-    // insert it into the given emeter packet 
+    // insert it into the given emeter packet
     return emeter_packet.setObisElement(obis, byte_array.data());
 }
