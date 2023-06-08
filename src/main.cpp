@@ -25,9 +25,9 @@ using namespace std::chrono;
 // and the udp packet size is 608 bytes
 #define INCLUDE_FREQUENCY_MEASUREMENT (1)
 #if INCLUDE_FREQUENCY_MEASUREMENT
-  #define UDP_PACKET_SIZE 608
+  #define UDP_PACKET_SIZE 610
 #else
-  #define UDP_PACKET_SIZE 600
+  #define UDP_PACKET_SIZE 602
 #endif
 
 
@@ -52,7 +52,7 @@ static Logger logger("main");
 void populatePacket(const uint8_t *udp_packet, double feed_in_watts) {
     SpeedwireHeader speedwire_packet(udp_packet, sizeof(udp_packet));
     uint16_t udp_payload_length = (uint16_t)(UDP_PACKET_SIZE - SpeedwireHeader::getPayloadOffset(SpeedwireHeader::sma_emeter_protocol_id) - 2);  // -2 for whatever reason
-    speedwire_packet.setDefaultHeader(1, udp_payload_length, SpeedwireHeader::sma_emeter_protocol_id);
+    speedwire_packet.setDefaultHeader(1, udp_payload_length, 0x6081);
 
     SpeedwireEmeterProtocol emeter_packet(speedwire_packet);
     emeter_packet.setSusyID(0x174);
