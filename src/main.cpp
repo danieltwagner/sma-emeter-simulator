@@ -151,11 +151,12 @@ void populatePacket(const uint8_t *udp_packet, double feed_in_watts) {
 
 int main(int argc, char** argv) {
 
-    if (argc < 2) {
-        std::cerr << "Usage: " << argv[0] << " ip_addr" << std::endl;
+    if (argc < 3) {
+        std::cerr << "Usage: " << argv[0] << " ip_addr watt" << std::endl;
         return 1;
     }
     char *hostname = argv[1];
+    int feedInWatts = atoi(argv[2]);
 
     // configure logger and logging levels
     ILogListener* log_listener = new LogListener();
@@ -173,14 +174,10 @@ int main(int argc, char** argv) {
     destination.sin_addr.s_addr = inet_addr(hostname);
 
     uint8_t udp_packet[UDP_PACKET_SIZE];
-    double wattsMax = 11000;
-    double wattsMin = 1400;
-    double feedInWatts = 1500;
-    double increment = 10;
 
     while (true) {
 
-        logger.print(LogLevel::LOG_INFO_0, "Sending packet feeding in %5.0f Watts...", feedInWatts);
+        logger.print(LogLevel::LOG_INFO_0, "Sending packet feeding in %5d Watts...", feedInWatts);
         populatePacket(udp_packet, feedInWatts);
 
 #if 0
@@ -211,11 +208,6 @@ int main(int argc, char** argv) {
 #endif
 
         ::sendto(sock, udp_packet, UDP_PACKET_SIZE, 0, reinterpret_cast<sockaddr*>(&destination), sizeof(destination));
-
-        feedInWatts += increment;
-        if (feedInWatts >= wattsMax || feedInWatts <= wattsMin) {
-            increment *= -1;
-        }
 
         std::this_thread::sleep_for(1000ms);
     }
